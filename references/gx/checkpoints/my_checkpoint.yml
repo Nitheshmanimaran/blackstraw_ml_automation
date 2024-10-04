@@ -1,0 +1,19 @@
+   # great_expectations/checkpoints/my_checkpoint.yml
+   name: my_checkpoint
+   config_version: 1.0
+   class_name: Checkpoint
+   run_name_template: "%Y-%M-MyCheckpoint"
+   validations:
+     - batch_request:
+         datasource_name: my_datasource
+         data_connector_name: default_inferred_data_connector_name
+         data_asset_name: extracted_data.csv
+         limit: 1000
+       expectation_suite_name: extracted_data.csv.warning
+   action_list:
+     - name: store_validation_result
+       action:
+         class_name: StoreValidationResultAction
+     - name: update_data_docs
+       action:
+         class_name: UpdateDataDocsAction
