@@ -1,44 +1,54 @@
-import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
-from airflow import DAG
-from airflow.operators.bash import BashOperator
-from airflow.providers.postgres.operators.postgres import PostgresOperator
-from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.operators.python import PythonOperator
-from airflow.sensors.filesystem import FileSensor
 from datetime import datetime, timedelta
 import pandas as pd
 import great_expectations as gx
-from great_expectations.exceptions import DataContextError
-from house_prices import FEATURE_COLUMNS, MODEL_PATH
-from house_prices.preprocess import preprocess
 from dotenv import load_dotenv
-
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.providers.postgres.hooks.postgres import PostgresHook
+from airflow.sensors.filesystem import FileSensor
+from great_expectations.exceptions import DataContextError
+import sys
+sys.path.append(
+    os.path.abspath(
+        os.path.join(os.path.dirname(__file__), '../../..')
+    )
+)
+# Load environment variables
 load_dotenv()
+from house_prices import FEATURE_COLUMNS
+from house_prices.preprocess import preprocess
 
 MONITOR_DIR = os.getenv("MONITOR_DIR")
+
 
 def extract_data(**kwargs):
     import glob
 
     directory_to_monitor = MONITOR_DIR
 
-    #Getting list of csv files
-    csv_files = [f for f in glob.glob(os.path.join(directory_to_monitor, '*.csv')) if '_checked' not in f]
-    
+    # Getting list of csv files
+    csv_files = [
+        f for f in glob.glob(os.path.join(directory_to_monitor, '*.csv'))
+        if '_checked' not in f
+    ]
+
     if not csv_files:
         print("All csv files are already scanned. No new files")
-    
+
     for file_path in csv_files:
         df_raw = pd.read_csv(file_path)
-        
+
         df = preprocess(df_raw[FEATURE_COLUMNS], is_training=False)
-        kwargs['ti'].xcom_push(key='extracted_rows', value=df.to_dict(orient='records'))
-        
+        kwargs['ti'].xcom_push(
+            key='extracted_rows',
+            value=df.to_dict(orient='records')
+        )
+
         # Rename the processed file
         new_file_path = file_path.replace('.csv', '_checked.csv')
         os.rename(file_path, new_file_path)
+
 
 def validate_data():
     try:
@@ -63,17 +73,24 @@ def validate_data():
 
         # Build and open Data Docs
         context.build_data_docs()
-        validation_result_identifier = checkpoint_result.list_validation_result_identifiers()[0]
-        context.open_data_docs(resource_identifier=validation_result_identifier)
+        validation_result_identifier = (
+            checkpoint_result.list_validation_result_identifiers()[0]
+        )
+        context.open_data_docs(
+            resource_identifier=validation_result_identifier
+        )
 
     except DataContextError as e:
         print(f"Error loading GE context: {e}")
     except Exception as e:
         print(f"An error occurred: {e}")
 
+
 def load_data(**kwargs):
     # Pull rows from XCom
-    rows = kwargs['ti'].xcom_pull(key='extracted_rows', task_ids='extract_data')
+    rows = kwargs['ti'].xcom_pull(
+        key='extracted_rows', task_ids='extract_data'
+        )
 
     target_hook = PostgresHook(postgres_conn_id='target_postgres_conn')
     target_conn = target_hook.get_conn()
@@ -105,16 +122,22 @@ def load_data(**kwargs):
         try:
             target_cursor.execute("""
                 INSERT INTO target_predictions (
-                    Foundation_BrkTil, Foundation_CBlock, Foundation_PConc, Foundation_Slab, 
-                    Foundation_Stone, Foundation_Wood, KitchenQual_Ex, KitchenQual_Fa, 
-                    KitchenQual_Gd, KitchenQual_TA, TotRmsAbvGrd, WoodDeckSF, YrSold, 
+                    Foundation_BrkTil, Foundation_CBlock, Foundation_PConc,
+                    Foundation_Slab, Foundation_Stone, Foundation_Wood,
+                    KitchenQual_Ex, KitchenQual_Fa, KitchenQual_Gd,
+                    KitchenQual_TA, TotRmsAbvGrd, WoodDeckSF, YrSold,
                     "1stFlrSF"
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                );
             """, (
-                row['Foundation_BrkTil'], row['Foundation_CBlock'], row['Foundation_PConc'], row['Foundation_Slab'],
-                row['Foundation_Stone'], row['Foundation_Wood'], row['KitchenQual_Ex'], row['KitchenQual_Fa'],
-                row['KitchenQual_Gd'], row['KitchenQual_TA'], row['TotRmsAbvGrd'], row['WoodDeckSF'], row['YrSold'],
-                row['1stFlrSF']
+                row['Foundation_BrkTil'], row['Foundation_CBlock'],
+                row['Foundation_PConc'], row['Foundation_Slab'],
+                row['Foundation_Stone'], row['Foundation_Wood'],
+                row['KitchenQual_Ex'], row['KitchenQual_Fa'],
+                row['KitchenQual_Gd'], row['KitchenQual_TA'],
+                row['TotRmsAbvGrd'], row['WoodDeckSF'],
+                row['YrSold'], row['1stFlrSF']
             ))
         except Exception as e:
             print(f"Error inserting row {row}: {e}")
@@ -122,6 +145,7 @@ def load_data(**kwargs):
     target_conn.commit()
     target_cursor.close()
     target_conn.close()
+
 
 with DAG(
     'data_ingestion_dag',
@@ -158,4 +182,6 @@ with DAG(
         python_callable=load_data,
     )
 
-    sense_file_task >> extract_data_task >> validate_data_task >> load_data_task
+    sense_file_task >> extract_data_task
+    extract_data_task >> validate_data_task
+    validate_data_task >> load_data_task

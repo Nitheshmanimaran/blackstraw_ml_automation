@@ -19,7 +19,12 @@ from house_prices.preprocess import preprocess
 def build_model(filepath: str) -> dict[str, float]:
     df_raw = pd.read_csv(filepath)
     df = preprocess(df_raw[FEATURE_COLUMNS], is_training=True)
-    X_train, X_test, y_train, y_test = train_test_split(df, df_raw[LABEL_COLUMN], test_size=0.33, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(
+        df,
+        df_raw[LABEL_COLUMN],
+        test_size=0.33,
+        random_state=42
+    )
     model = train_model(X_train, y_train)
     y_test_pred = model.predict(X_test)
     return {'rmsle': compute_rmsle(y_test, y_test_pred)}
@@ -32,6 +37,10 @@ def train_model(X_train: pd.DataFrame, y_train: pd.Series) -> Any:
     return model
 
 
-def compute_rmsle(y_test: np.ndarray, y_pred: np.ndarray, precision: int = 2) -> float:
+def compute_rmsle(
+        y_test: np.ndarray,
+        y_pred: np.ndarray,
+        precision: int = 2
+        ) -> float:
     rmsle = np.sqrt(mean_squared_log_error(y_test, y_pred))
     return round(rmsle, precision)
