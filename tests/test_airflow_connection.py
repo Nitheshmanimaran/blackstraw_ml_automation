@@ -2,7 +2,7 @@ from airflow.hooks.base import BaseHook
 
 def test_connection():
     try:
-        conn = BaseHook.get_connection('house_prices')
+        conn = BaseHook.get_connection('target_postgres_conn')
         print(f"Host: {conn.host}")
         print(f"Schema: {conn.schema}")
         print(f"Login: {conn.login}")

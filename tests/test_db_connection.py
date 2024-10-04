@@ -1,5 +1,6 @@
 import psycopg2
-from config import Config
+import os
+from dot_env
 
 def test_db_connection():
     try:
