@@ -5,12 +5,14 @@ from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
-#from house_prices.preprocess import preprocess
 from house_prices.inference import make_predictions
+from dotenv import load_dotenv
 
+load_dotenv()
 # Define the directory to watch for new CSV files
-WATCH_DIRECTORY = "/home/username/blackstraw_ml_automation/data/raw/ingest_raw_directory"
-PROCESSED_FILES_LOG = "/home/username/blackstraw_ml_automation/data/processed/text/processed_files.txt"
+WATCH_DIRECTORY = os.getenv("WATCH_DIRECTORY")
+PROCESSED_FILES_LOG = os.getenv("PROCESSED_FILES_LOG")
+PREDICTIONS_DIR = os.getenv("PREDICTIONS_DIR")
 
 def check_for_new_files(**kwargs):
     # Read the list of already processed files
@@ -38,7 +40,7 @@ def process_and_predict(**kwargs):
         
         predictions = make_predictions(file_path)        
         # Save predictions to a csv file in /home/username/blackstraw/data/predicted_csv_files
-        predictions.to_csv(f'/home/username/blackstraw_ml_automation/data/processed/predicted_csv_files/{csv_file}_predictions.csv', index=False)
+        predictions.to_csv(f'{PREDICTIONS_DIR}/{csv_file}_predictions.csv', index=False)
         
         # Log the processed file
         with open(PROCESSED_FILES_LOG, 'a') as f:

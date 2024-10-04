@@ -1,8 +1,15 @@
 import pandas as pd
+import os
 import numpy as np
 import joblib
 from sklearn.model_selection import train_test_split
-from config import Config
+from dotenv import load_dotenv
+
+load_dotenv()
+
+SCALER_PATH = os.getenv('SCALER_PATH')
+ONE_HOT_ENCODER_PATH = os.getenv('ONE_HOT_ENCODER_PATH')
+MODEL_PATH = os.getenv('MODEL_PATH')
 
 
 def split_dataset(data: pd.DataFrame, label: str):
@@ -35,7 +42,8 @@ def scale_continuous_features(X: pd.DataFrame):
         'YrSold',
         '1stFlrSF'
     ]
-    scaler = joblib.load(Config.SCALER_PATH)
+
+    scaler = joblib.load(SCALER_PATH)
     scaled_columns = scaler.transform(X[continuous_columns])
     continuous_features = pd.DataFrame(
         data=scaled_columns,
@@ -49,7 +57,7 @@ def convert_categorical_values(X: pd.DataFrame) -> pd.DataFrame:
         "Foundation",
         "KitchenQual"
     ]
-    ohe = joblib.load(Config.ONE_HOT_ENCODER_PATH)
+    ohe = joblib.load(ONE_HOT_ENCODER_PATH)
     array_hot_encoded = ohe.transform(X[categorical_columns])
     feature_columns = ohe.get_feature_names_out()
     categorical_features = pd.DataFrame.sparse.from_spmatrix(
@@ -74,7 +82,7 @@ def preprocess(X: pd.DataFrame, y: np.array):
 
 def make_multiple_predictions(input_data: pd.DataFrame) -> np.ndarray:
     dataframe = scale_convert_features(input_data)
-    model = joblib.load(Config.MODEL_PATH)
+    model = joblib.load(MODEL_PATH)
     y_pred = model.predict(dataframe)
     return np.around(y_pred, 2)
 

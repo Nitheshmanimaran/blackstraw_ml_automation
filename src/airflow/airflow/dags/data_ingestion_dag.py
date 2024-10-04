@@ -1,7 +1,6 @@
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
-import os
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.providers.postgres.operators.postgres import PostgresOperator
@@ -10,13 +9,15 @@ from airflow.operators.python import PythonOperator
 from airflow.sensors.filesystem import FileSensor
 from datetime import datetime, timedelta
 import pandas as pd
-import joblib
 import great_expectations as gx
 from great_expectations.exceptions import DataContextError
 from house_prices import FEATURE_COLUMNS, MODEL_PATH
 from house_prices.preprocess import preprocess
+from dotenv import load_dotenv
 
-MONITOR_DIR = "/home/username/blackstraw_ml_automation/data/raw/raw_data"
+load_dotenv()
+
+MONITOR_DIR = os.getenv("MONITOR_DIR")
 
 def extract_data(**kwargs):
     import glob
@@ -35,7 +36,6 @@ def extract_data(**kwargs):
         df = preprocess(df_raw[FEATURE_COLUMNS], is_training=False)
         kwargs['ti'].xcom_push(key='extracted_rows', value=df.to_dict(orient='records'))
         
-        #df.to_csv('/home/username/blackstraw/data/sample.csv', index=False)
         # Rename the processed file
         new_file_path = file_path.replace('.csv', '_checked.csv')
         os.rename(file_path, new_file_path)

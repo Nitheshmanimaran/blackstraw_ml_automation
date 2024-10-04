@@ -2,6 +2,14 @@ from sklearn.model_selection import train_test_split
 import joblib
 import pandas as pd
 import numpy as np
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+SCALER_PATH = os.getenv('SCALER_PATH')
+ONE_HOT_ENCODER_PATH = os.getenv('ONE_HOT_ENCODER_PATH')
+MODEL_PATH = os.getenv('MODEL_PATH')
 
 
 def split_dataset(data: pd.DataFrame, label: str):
@@ -34,7 +42,7 @@ def scale_continuous_features(X: pd.DataFrame):
         'YrSold',
         '1stFlrSF'
     ]
-    scaler = joblib.load("models/continuous_scaler.joblib")
+    scaler = joblib.load(SCALER_PATH)
     scaled_columns = scaler.transform(X[continuous_columns])
     continuous_features = pd.DataFrame(
         data=scaled_columns,
@@ -48,7 +56,7 @@ def convert_categorical_values(X: pd.DataFrame) -> pd.DataFrame:
         "Foundation",
         "KitchenQual"
     ]
-    ohe = joblib.load("models/one_hot_encoder.joblib")
+    ohe = joblib.load(ONE_HOT_ENCODER_PATH)
     array_hot_encoded = ohe.transform(X[categorical_columns])
     feature_columns = ohe.get_feature_names_out()
     categorical_features = pd.DataFrame.sparse.from_spmatrix(

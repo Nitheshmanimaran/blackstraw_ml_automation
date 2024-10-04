@@ -1,8 +1,12 @@
 import streamlit as st
 import requests
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Define the FastAPI endpoint
-FASTAPI_URL = "http://127.0.0.1:8000/predict"
+FASTAPI_URL = os.getenv("FASTAPI_URL")
 
 # Streamlit app
 st.title("House Price Prediction")
