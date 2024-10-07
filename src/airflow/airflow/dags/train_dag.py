@@ -1,95 +1,174 @@
 import sys
 import os
+import logging
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
 from airflow import DAG
-from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
-from airflow.sensors.filesystem import FileSensor
 from datetime import datetime, timedelta
 import pandas as pd
-from house_prices import FEATURE_COLUMNS, MODEL_PATH
-from house_prices.preprocess import preprocess
 from dotenv import load_dotenv
 import joblib
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_log_error
+from sklearn.model_selection import train_test_split
+import numpy as np
 
 load_dotenv()
 
-# Preprocess task
-def preprocess_task(**kwargs):
-    # Simulating loading data
-    data = pd.read_csv(os.getenv('DATA_PATH'))  # Example: path loaded from env
-    processed_data = preprocess(data)  # Preprocessing the data
-    output_path = os.path.join(os.getenv('OUTPUT_PATH'), 'processed_data.csv')
-    processed_data.to_csv(output_path, index=False)
-    return output_path
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-# Training task
-def training_task(**kwargs):
-    # Loading preprocessed data
-    processed_data = pd.read_csv(kwargs['ti'].xcom_pull(task_ids='preprocess_task'))
-    X = processed_data[FEATURE_COLUMNS]
-    y = processed_data['price']  # Assuming 'price' is the target column
-    
-    # Placeholder for model training (e.g., sklearn)
-    from sklearn.linear_model import LinearRegression
-    model = LinearRegression()
-    model.fit(X, y)
+CONTINUOUS_FEATURE_COLUMNS = ['TotRmsAbvGrd', 'WoodDeckSF', 'YrSold', '1stFlrSF']
+CATEGORICAL_FEATURE_COLUMNS = ['Foundation', 'KitchenQual']
+FEATURE_COLUMNS = CONTINUOUS_FEATURE_COLUMNS + CATEGORICAL_FEATURE_COLUMNS
+LABEL_COLUMN = 'SalePrice'
+DATA_PATH = os.getenv('NEW_TRAIN_DIR')
+TRAINED_DIR = os.getenv('TRAINED_DIR')
+MODEL_PATH = os.getenv('TRAINED_MODEL_PATH')
 
-    # Saving the model
-    joblib.dump(model, MODEL_PATH)
-
-
-# Inference task
-def inference_task(**kwargs):
-    # Loading trained model
-    model = joblib.load(MODEL_PATH)
-
-    # Simulating inference data
-    new_data = pd.read_csv(os.getenv('NEW_DATA_PATH'))
-    processed_data = preprocess(new_data)
-    X_new = processed_data[FEATURE_COLUMNS]
-
-    # Predicting
-    predictions = model.predict(X_new)
-    
-    output_path = os.path.join(os.getenv('OUTPUT_PATH'), 'predictions.csv')
-    pd.DataFrame({'predictions': predictions}).to_csv(output_path, index=False)
-    return output_path
-
-
-default_args ={
+default_args = {
     'owner': 'airflow',
+    'depends_on_past': False,
+    'email_on_failure': False,
+    'email_on_retry': False,
     'retries': 1,
     'retry_delay': timedelta(minutes=5),
-    'start_date': datetime(2023, 1, 1),
-    'catchup': False
 }
 
-with DAG(
-    'house_price_prediction_dag',
+dag = DAG(
+    'train_model_dag',
     default_args=default_args,
-    schedule_interval='@daily',
-    catchup=False
-) as dag:
-    
-    preprocess_task = PythonOperator(
-        task_id = "preprocess_task",
-        python_callable= preprocess_task,
-        provide_context = True,
-    )
+    description='A DAG to train models on new data',
+    schedule_interval=timedelta(days=1),
+    start_date=datetime(2023, 1, 1),
+    catchup=False,
+)
 
-    training_task = PythonOperator(
-        task_id = "training_task",
-        python_callable= training_task,
-        provide_context = True,
-    )
+def check_files_task(**kwargs):
+    logger.info("Checking for new CSV files")
+    csv_files = [f for f in os.listdir(DATA_PATH) if f.endswith('.csv')]
+    if not csv_files:
+        logger.info("No new CSV files found")
+        return None
+    logger.info(f"Found CSV files: {csv_files}")
+    return csv_files
 
-    inference_task = PythonOperator(
-        task_id = "inference_task",
-        python_callable= inference_task,
-        provide_context = True,
-    )
+def preprocess_task(**kwargs):
+    ti = kwargs['ti']
+    csv_files = ti.xcom_pull(task_ids='check_files_task')
+    if not csv_files:
+        return None
 
+    for csv_file in csv_files:
+        logger.info(f"Preprocessing file: {csv_file}")
+        # Create a directory named after the CSV file (without extension)
+        output_dir = os.path.join(TRAINED_DIR, os.path.splitext(csv_file)[0])
+        os.makedirs(output_dir, exist_ok=True)
+        df_raw = pd.read_csv(os.path.join(DATA_PATH, csv_file))
 
-    preprocess_task >> training_task >> inference_task
+        # Log the columns in the DataFrame
+        logger.info(f"Columns in DataFrame: {df_raw.columns.tolist()}")
+        logger.info(f"Expected continuous columns: {CONTINUOUS_FEATURE_COLUMNS}")
+
+        # Preprocess continuous features
+        try:
+            scaler = StandardScaler()
+            scaler.fit(df_raw[CONTINUOUS_FEATURE_COLUMNS])
+            joblib.dump(scaler, os.path.join(output_dir, 'scaler.joblib'))
+            scaled_features = scaler.transform(df_raw[CONTINUOUS_FEATURE_COLUMNS])
+            scaled_df = pd.DataFrame(scaled_features, columns=CONTINUOUS_FEATURE_COLUMNS, index=df_raw.index)
+        except KeyError as e:
+            logger.error(f"KeyError: {e}")
+            return None
+
+        # Preprocess categorical features
+        one_hot_encoder = OneHotEncoder(handle_unknown='ignore', dtype='int')
+        one_hot_encoder.fit(df_raw[CATEGORICAL_FEATURE_COLUMNS])
+        joblib.dump(one_hot_encoder, os.path.join(output_dir, 'one_hot_encoder.joblib'))
+        categorical_features = one_hot_encoder.transform(df_raw[CATEGORICAL_FEATURE_COLUMNS])
+        categorical_df = pd.DataFrame.sparse.from_spmatrix(categorical_features,
+                                                           columns=one_hot_encoder.get_feature_names_out(),
+                                                           index=df_raw.index)
+
+        # Combine features
+        processed_df = pd.concat([scaled_df, categorical_df], axis=1)
+        processed_df.to_csv(os.path.join(output_dir, 'processed_data.csv'))
+        logger.info(f"Preprocessed data saved for file: {csv_file}")
+
+def train_model_task(**kwargs):
+    ti = kwargs['ti']
+    csv_files = ti.xcom_pull(task_ids='check_files_task')
+    if not csv_files:
+        return None
+
+    for csv_file in csv_files:
+        logger.info(f"Training model for file: {csv_file}")
+        output_dir = os.path.join(TRAINED_DIR, os.path.splitext(csv_file)[0])
+        df = pd.read_csv(os.path.join(output_dir, 'processed_data.csv'))
+        df_raw = pd.read_csv(os.path.join(DATA_PATH, csv_file))
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            df,
+            df_raw[LABEL_COLUMN],
+            test_size=0.33,
+            random_state=42
+        )
+
+        model = LinearRegression()
+        model.fit(X_train, y_train)
+        joblib.dump(model, os.path.join(output_dir, 'model.joblib'))
+        logger.info(f"Model trained and saved for file: {csv_file}")
+
+        # Save test data for RMSLE computation
+        np.save(os.path.join(output_dir, 'X_test.npy'), X_test)
+        np.save(os.path.join(output_dir, 'y_test.npy'), y_test)
+
+def compute_rmsle_task(**kwargs):
+    ti = kwargs['ti']
+    csv_files = ti.xcom_pull(task_ids='check_files_task')
+    if not csv_files:
+        return None
+
+    for csv_file in csv_files:
+        logger.info(f"Computing RMSLE for file: {csv_file}")
+        output_dir = os.path.join(TRAINED_DIR, os.path.splitext(csv_file)[0])
+        model = joblib.load(os.path.join(output_dir, 'model.joblib'))
+        X_test = np.load(os.path.join(output_dir, 'X_test.npy'))
+        y_test = np.load(os.path.join(output_dir, 'y_test.npy'))
+
+        y_pred = model.predict(X_test)
+        rmsle = np.sqrt(mean_squared_log_error(y_test, y_pred))
+        logger.info(f"RMSLE for file {csv_file}: {rmsle}")
+
+check_files = PythonOperator(
+    task_id='check_files_task',
+    python_callable=check_files_task,
+    dag=dag,
+)
+
+preprocess = PythonOperator(
+    task_id='preprocess_task',
+    python_callable=preprocess_task,
+    provide_context=True,
+    dag=dag,
+)
+
+train_model = PythonOperator(
+    task_id='train_model_task',
+    python_callable=train_model_task,
+    provide_context=True,
+    dag=dag,
+)
+
+compute_rmsle = PythonOperator(
+    task_id='compute_rmsle_task',
+    python_callable=compute_rmsle_task,
+    provide_context=True,
+    dag=dag,
+)
+
+# Define task dependencies
+check_files >> preprocess >> train_model >> compute_rmsle
