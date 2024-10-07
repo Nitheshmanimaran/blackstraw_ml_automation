@@ -15,8 +15,7 @@ from sklearn.model_selection import train_test_split
 import numpy as np
 import mlflow
 import mlflow.sklearn
-
-
+from mlflow.tracking import MlflowClient
 
 load_dotenv()
 os.environ['MLFLOW_TRACKING_URI'] = 'http://localhost:5000'
@@ -124,7 +123,7 @@ def train_model_task(**kwargs):
         model = LinearRegression()
 
         # Start an MLflow run
-        with mlflow.start_run():
+        with mlflow.start_run() as run:
             model.fit(X_train, y_train)
             joblib.dump(model, os.path.join(output_dir, 'model.joblib'))
             logger.info(f"Model trained and saved for file: {csv_file}")
@@ -132,7 +131,7 @@ def train_model_task(**kwargs):
             # Log model and parameters
             mlflow.log_param("csv_file", csv_file)
             mlflow.log_param("model_type", "LinearRegression")
-            mlflow.sklearn.log_model(model, "model")
+            mlflow.sklearn.log_model(model, "model", registered_model_name="HousePriceModel")
 
             # Evaluate and log metrics
             y_pred = model.predict(X_test)
@@ -144,8 +143,14 @@ def train_model_task(**kwargs):
             mlflow.log_artifact(os.path.join(output_dir, 'scaler.joblib'))
             mlflow.log_artifact(os.path.join(output_dir, 'one_hot_encoder.joblib'))
 
-            # Register the model
-            mlflow.sklearn.log_model(model, "model", registered_model_name="HousePriceModel")
+            # Transition the model to Production
+            client = MlflowClient()
+            model_version = client.get_latest_versions("HousePriceModel", stages=["None"])[0].version
+            client.transition_model_version_stage(
+                name="HousePriceModel",
+                version=model_version,
+                stage="Production"
+            )
 
         # Save test data for RMSLE computation
         np.save(os.path.join(output_dir, 'X_test.npy'), X_test)
