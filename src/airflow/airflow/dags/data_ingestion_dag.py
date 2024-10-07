@@ -8,6 +8,7 @@ from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sensors.filesystem import FileSensor
 from great_expectations.exceptions import DataContextError
+import mlflow
 import sys
 sys.path.append(
     os.path.abspath(
@@ -20,7 +21,6 @@ from house_prices import FEATURE_COLUMNS
 from house_prices.preprocess import preprocess
 
 MONITOR_DIR = os.getenv("MONITOR_DIR")
-
 
 def extract_data(**kwargs):
     import glob
@@ -36,19 +36,21 @@ def extract_data(**kwargs):
     if not csv_files:
         print("All csv files are already scanned. No new files")
 
-    for file_path in csv_files:
-        df_raw = pd.read_csv(file_path)
+    with mlflow.start_run():
+        mlflow.log_param("num_files", len(csv_files))
 
-        df = preprocess(df_raw[FEATURE_COLUMNS], is_training=False)
-        kwargs['ti'].xcom_push(
-            key='extracted_rows',
-            value=df.to_dict(orient='records')
-        )
+        for file_path in csv_files:
+            df_raw = pd.read_csv(file_path)
 
-        # Rename the processed file
-        new_file_path = file_path.replace('.csv', '_checked.csv')
-        os.rename(file_path, new_file_path)
+            df = preprocess(df_raw[FEATURE_COLUMNS], is_training=False)
+            kwargs['ti'].xcom_push(
+                key='extracted_rows',
+                value=df.to_dict(orient='records')
+            )
 
+            # Rename the processed file
+            new_file_path = file_path.replace('.csv', '_checked.csv')
+            os.rename(file_path, new_file_path)
 
 def validate_data():
     try:
@@ -62,35 +64,38 @@ def validate_data():
         # Run the checkpoint
         checkpoint_result = checkpoint.run()
 
-        # Check if the validation was successful
-        if checkpoint_result["success"]:
-            print("Data quality check passed.")
-        else:
-            print("Data quality check failed.")
-            for validation_result in checkpoint_result["run_results"].values():
-                if not validation_result["validation_result"]["success"]:
-                    print(validation_result["validation_result"])
+        with mlflow.start_run():
+            # Log validation success
+            mlflow.log_metric("validation_success", checkpoint_result["success"])
 
-        # Build and open Data Docs
-        context.build_data_docs()
-        validation_result_identifier = (
-            checkpoint_result.list_validation_result_identifiers()[0]
-        )
-        context.open_data_docs(
-            resource_identifier=validation_result_identifier
-        )
+            # Check if the validation was successful
+            if checkpoint_result["success"]:
+                print("Data quality check passed.")
+            else:
+                print("Data quality check failed.")
+                for validation_result in checkpoint_result["run_results"].values():
+                    if not validation_result["validation_result"]["success"]:
+                        print(validation_result["validation_result"])
+
+            # Build and open Data Docs
+            context.build_data_docs()
+            validation_result_identifier = (
+                checkpoint_result.list_validation_result_identifiers()[0]
+            )
+            context.open_data_docs(
+                resource_identifier=validation_result_identifier
+            )
 
     except DataContextError as e:
         print(f"Error loading GE context: {e}")
     except Exception as e:
         print(f"An error occurred: {e}")
 
-
 def load_data(**kwargs):
     # Pull rows from XCom
     rows = kwargs['ti'].xcom_pull(
         key='extracted_rows', task_ids='extract_data'
-        )
+    )
 
     target_hook = PostgresHook(postgres_conn_id='target_postgres_conn')
     target_conn = target_hook.get_conn()
@@ -118,34 +123,36 @@ def load_data(**kwargs):
         );
     """)
 
-    for row in rows:
-        try:
-            target_cursor.execute("""
-                INSERT INTO target_predictions (
-                    Foundation_BrkTil, Foundation_CBlock, Foundation_PConc,
-                    Foundation_Slab, Foundation_Stone, Foundation_Wood,
-                    KitchenQual_Ex, KitchenQual_Fa, KitchenQual_Gd,
-                    KitchenQual_TA, TotRmsAbvGrd, WoodDeckSF, YrSold,
-                    "1stFlrSF"
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                );
-            """, (
-                row['Foundation_BrkTil'], row['Foundation_CBlock'],
-                row['Foundation_PConc'], row['Foundation_Slab'],
-                row['Foundation_Stone'], row['Foundation_Wood'],
-                row['KitchenQual_Ex'], row['KitchenQual_Fa'],
-                row['KitchenQual_Gd'], row['KitchenQual_TA'],
-                row['TotRmsAbvGrd'], row['WoodDeckSF'],
-                row['YrSold'], row['1stFlrSF']
-            ))
-        except Exception as e:
-            print(f"Error inserting row {row}: {e}")
+    with mlflow.start_run():
+        mlflow.log_param("num_rows", len(rows))
+
+        for row in rows:
+            try:
+                target_cursor.execute("""
+                    INSERT INTO target_predictions (
+                        Foundation_BrkTil, Foundation_CBlock, Foundation_PConc,
+                        Foundation_Slab, Foundation_Stone, Foundation_Wood,
+                        KitchenQual_Ex, KitchenQual_Fa, KitchenQual_Gd,
+                        KitchenQual_TA, TotRmsAbvGrd, WoodDeckSF, YrSold,
+                        "1stFlrSF"
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    );
+                """, (
+                    row['Foundation_BrkTil'], row['Foundation_CBlock'],
+                    row['Foundation_PConc'], row['Foundation_Slab'],
+                    row['Foundation_Stone'], row['Foundation_Wood'],
+                    row['KitchenQual_Ex'], row['KitchenQual_Fa'],
+                    row['KitchenQual_Gd'], row['KitchenQual_TA'],
+                    row['TotRmsAbvGrd'], row['WoodDeckSF'],
+                    row['YrSold'], row['1stFlrSF']
+                ))
+            except Exception as e:
+                print(f"Error inserting row {row}: {e}")
 
     target_conn.commit()
     target_cursor.close()
     target_conn.close()
-
 
 with DAG(
     'data_ingestion_dag',

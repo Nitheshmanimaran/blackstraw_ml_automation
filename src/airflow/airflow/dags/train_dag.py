@@ -13,9 +13,13 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_log_error
 from sklearn.model_selection import train_test_split
 import numpy as np
+import mlflow
+import mlflow.sklearn
+
+
 
 load_dotenv()
-
+os.environ['MLFLOW_TRACKING_URI'] = 'http://localhost:5000'
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -118,9 +122,30 @@ def train_model_task(**kwargs):
         )
 
         model = LinearRegression()
-        model.fit(X_train, y_train)
-        joblib.dump(model, os.path.join(output_dir, 'model.joblib'))
-        logger.info(f"Model trained and saved for file: {csv_file}")
+
+        # Start an MLflow run
+        with mlflow.start_run():
+            model.fit(X_train, y_train)
+            joblib.dump(model, os.path.join(output_dir, 'model.joblib'))
+            logger.info(f"Model trained and saved for file: {csv_file}")
+
+            # Log model and parameters
+            mlflow.log_param("csv_file", csv_file)
+            mlflow.log_param("model_type", "LinearRegression")
+            mlflow.sklearn.log_model(model, "model")
+
+            # Evaluate and log metrics
+            y_pred = model.predict(X_test)
+            rmsle = np.sqrt(mean_squared_log_error(y_test, y_pred))
+            mlflow.log_metric("rmsle", rmsle)
+            logger.info(f"RMSLE for file {csv_file}: {rmsle}")
+
+            # Log artifacts
+            mlflow.log_artifact(os.path.join(output_dir, 'scaler.joblib'))
+            mlflow.log_artifact(os.path.join(output_dir, 'one_hot_encoder.joblib'))
+
+            # Register the model
+            mlflow.sklearn.log_model(model, "model", registered_model_name="HousePriceModel")
 
         # Save test data for RMSLE computation
         np.save(os.path.join(output_dir, 'X_test.npy'), X_test)

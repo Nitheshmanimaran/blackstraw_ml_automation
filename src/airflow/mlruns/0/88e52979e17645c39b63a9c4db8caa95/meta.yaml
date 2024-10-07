@@ -1,0 +1,15 @@
+artifact_uri: file:///home/username/blackstraw_ml_automation/src/airflow/mlruns/0/88e52979e17645c39b63a9c4db8caa95/artifacts
+end_time: 1728285505257
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: 88e52979e17645c39b63a9c4db8caa95
+run_name: dapper-zebra-926
+run_uuid: 88e52979e17645c39b63a9c4db8caa95
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1728285502073
+status: 3
+tags: []
+user_id: username
