@@ -91,6 +91,49 @@ def validate_data():
     except Exception as e:
         print(f"An error occurred: {e}")
 
+def log_statistics_to_postgres(statistics: pd.DataFrame):
+    """Log the calculated statistics to a PostgreSQL database."""
+    target_hook = PostgresHook(postgres_conn_id='target_postgres_conn')
+    target_conn = target_hook.get_conn()
+    target_cursor = target_conn.cursor()
+
+    # Ensure the table exists
+    target_cursor.execute("""
+        CREATE TABLE IF NOT EXISTS public.feature_statistics (
+            feature_name TEXT NOT NULL,
+            mean DOUBLE PRECISION,
+            variance DOUBLE PRECISION,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    for feature, row in statistics.iterrows():
+        target_cursor.execute(
+            """
+            INSERT INTO feature_statistics (feature_name, mean, variance)
+            VALUES (%s, %s, %s)
+            """,
+            (feature, row['mean'], row['variance'])
+        )
+
+    target_conn.commit()
+    target_cursor.close()
+    target_conn.close()
+
+def calculate_and_log_statistics(**kwargs):
+    # Pull rows from XCom
+    rows = kwargs['ti'].xcom_pull(
+        key='extracted_rows', task_ids='extract_data'
+    )
+    df = pd.DataFrame(rows)
+
+    # Calculate statistics
+    statistics = df.describe().loc[['mean', 'std']].transpose()
+    statistics['variance'] = statistics['std'] ** 2
+
+    # Log statistics to PostgreSQL
+    log_statistics_to_postgres(statistics)
+
 def load_data(**kwargs):
     # Pull rows from XCom
     rows = kwargs['ti'].xcom_pull(
@@ -184,11 +227,15 @@ with DAG(
         python_callable=validate_data,
     )
 
+    calculate_statistics_task = PythonOperator(
+        task_id='calculate_and_log_statistics',
+        python_callable=calculate_and_log_statistics,
+    )
+
     load_data_task = PythonOperator(
         task_id='load_data',
         python_callable=load_data,
     )
 
-    sense_file_task >> extract_data_task
-    extract_data_task >> validate_data_task
-    validate_data_task >> load_data_task
+    sense_file_task >> extract_data_task >> validate_data_task
+    validate_data_task >> calculate_statistics_task >> load_data_task
