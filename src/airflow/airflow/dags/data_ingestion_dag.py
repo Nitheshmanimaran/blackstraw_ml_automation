@@ -10,6 +10,7 @@ from airflow.sensors.filesystem import FileSensor
 from great_expectations.exceptions import DataContextError
 import mlflow
 import sys
+import logging
 sys.path.append(
     os.path.abspath(
         os.path.join(os.path.dirname(__file__), '../../..')
@@ -20,12 +21,18 @@ load_dotenv()
 from house_prices import FEATURE_COLUMNS
 from house_prices.preprocess import preprocess
 
-MONITOR_DIR = os.getenv("MONITOR_DIR")
+MONITOR_DIR = os.getenv("MONITOR_DIR")\
+
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def extract_data(**kwargs):
     import glob
 
     directory_to_monitor = MONITOR_DIR
+    logger.info(f"Monitoring directory: {directory_to_monitor}")
 
     # Getting list of csv files
     csv_files = [
@@ -34,12 +41,15 @@ def extract_data(**kwargs):
     ]
 
     if not csv_files:
-        print("All csv files are already scanned. No new files")
+        logger.info("All csv files are already scanned. No new files")
+        return
 
     with mlflow.start_run():
         mlflow.log_param("num_files", len(csv_files))
+        logger.info(f"Number of new CSV files: {len(csv_files)}")
 
         for file_path in csv_files:
+            logger.info(f"Processing file: {file_path}")
             df_raw = pd.read_csv(file_path)
 
             df = preprocess(df_raw[FEATURE_COLUMNS], is_training=False)
@@ -47,37 +57,53 @@ def extract_data(**kwargs):
                 key='extracted_rows',
                 value=df.to_dict(orient='records')
             )
+            logger.info(f"Data extracted and pushed to XCom for file: {file_path}")
 
             # Rename the processed file
             new_file_path = file_path.replace('.csv', '_checked.csv')
             os.rename(file_path, new_file_path)
+            logger.info(f"File renamed to: {new_file_path}")
 
-def validate_data():
+def validate_data(**kwargs):
     try:
-        # Initialize the GE context
-        context = gx.get_context()
+        # Specify the path to the Great Expectations project directory
+        ge_project_path = os.getenv('GE')
+        logger.info("Initializing Great Expectations context")
+        context = gx.data_context.DataContext(ge_project_path)
+
+        # Create a BatchRequest to load the data
+        batch_request = gx.core.batch.BatchRequest(
+            datasource_name="my_datasource",
+            data_connector_name="default_inferred_data_connector_name",
+            data_asset_name="extracted_data",
+        )
+
+        # Retrieve the validator
+        validator = context.get_validator(batch_request=batch_request, expectation_suite_name="extracted_data.csv.warning")
+        logger.info("Batch loaded successfully.")
+        logger.info(validator.head())  # Check if data is loaded
 
         # Load the checkpoint configuration
         checkpoint_name = "my_checkpoint"
+        logger.info(f"Loading checkpoint: {checkpoint_name}")
         checkpoint = context.get_checkpoint(checkpoint_name)
 
         # Run the checkpoint
+        logger.info("Running checkpoint")
         checkpoint_result = checkpoint.run()
 
         with mlflow.start_run():
-            # Log validation success
             mlflow.log_metric("validation_success", checkpoint_result["success"])
+            logger.info(f"Validation success: {checkpoint_result['success']}")
 
-            # Check if the validation was successful
             if checkpoint_result["success"]:
-                print("Data quality check passed.")
+                logger.info("Data quality check passed.")
             else:
-                print("Data quality check failed.")
+                logger.warning("Data quality check failed.")
                 for validation_result in checkpoint_result["run_results"].values():
                     if not validation_result["validation_result"]["success"]:
-                        print(validation_result["validation_result"])
+                        logger.warning(validation_result["validation_result"])
 
-            # Build and open Data Docs
             context.build_data_docs()
             validation_result_identifier = (
                 checkpoint_result.list_validation_result_identifiers()[0]
@@ -85,19 +111,19 @@ def validate_data():
             context.open_data_docs(
                 resource_identifier=validation_result_identifier
             )
+            logger.info("Data Docs built and opened")
 
     except DataContextError as e:
-        print(f"Error loading GE context: {e}")
+        logger.error(f"Error loading GE context: {e}")
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logger.error(f"An error occurred: {e}")
 
 def log_statistics_to_postgres(statistics: pd.DataFrame):
-    """Log the calculated statistics to a PostgreSQL database."""
+    logger.info("Logging statistics to PostgreSQL")
     target_hook = PostgresHook(postgres_conn_id='target_postgres_conn')
     target_conn = target_hook.get_conn()
     target_cursor = target_conn.cursor()
 
-    # Ensure the table exists
     target_cursor.execute("""
         CREATE TABLE IF NOT EXISTS public.feature_statistics (
             feature_name TEXT NOT NULL,
@@ -106,6 +132,7 @@ def log_statistics_to_postgres(statistics: pd.DataFrame):
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
+    logger.info("Ensured feature_statistics table exists")
 
     for feature, row in statistics.iterrows():
         target_cursor.execute(
@@ -115,27 +142,28 @@ def log_statistics_to_postgres(statistics: pd.DataFrame):
             """,
             (feature, row['mean'], row['variance'])
         )
+        logger.info(f"Logged statistics for feature: {feature}")
 
     target_conn.commit()
     target_cursor.close()
     target_conn.close()
+    logger.info("Statistics logging completed")
 
 def calculate_and_log_statistics(**kwargs):
-    # Pull rows from XCom
+    logger.info("Calculating and logging statistics")
     rows = kwargs['ti'].xcom_pull(
         key='extracted_rows', task_ids='extract_data'
     )
     df = pd.DataFrame(rows)
 
-    # Calculate statistics
     statistics = df.describe().loc[['mean', 'std']].transpose()
     statistics['variance'] = statistics['std'] ** 2
 
-    # Log statistics to PostgreSQL
     log_statistics_to_postgres(statistics)
+    logger.info("Statistics calculated and logged")
 
 def load_data(**kwargs):
-    # Pull rows from XCom
+    logger.info("Loading data into PostgreSQL")
     rows = kwargs['ti'].xcom_pull(
         key='extracted_rows', task_ids='extract_data'
     )
@@ -144,7 +172,6 @@ def load_data(**kwargs):
     target_conn = target_hook.get_conn()
     target_cursor = target_conn.cursor()
 
-    # Create the updated table schema
     target_cursor.execute("""
         CREATE TABLE IF NOT EXISTS public.target_predictions (
             Foundation_BrkTil TEXT,
@@ -165,9 +192,11 @@ def load_data(**kwargs):
             "PredictionTimestamp" TEXT
         );
     """)
+    logger.info("Ensured target_predictions table exists")
 
     with mlflow.start_run():
         mlflow.log_param("num_rows", len(rows))
+        logger.info(f"Number of rows to load: {len(rows)}")
 
         for row in rows:
             try:
@@ -190,12 +219,14 @@ def load_data(**kwargs):
                     row['TotRmsAbvGrd'], row['WoodDeckSF'],
                     row['YrSold'], row['1stFlrSF']
                 ))
+                logger.info(f"Inserted row into target_predictions: {row}")
             except Exception as e:
-                print(f"Error inserting row {row}: {e}")
+                logger.error(f"Error inserting row {row}: {e}")
 
     target_conn.commit()
     target_cursor.close()
     target_conn.close()
+    logger.info("Data loading completed")
 
 with DAG(
     'data_ingestion_dag',

@@ -1,12 +1,26 @@
 import great_expectations as gx
+from great_expectations.data_context import DataContext
+from great_expectations.core.batch import BatchRequest
 from great_expectations.exceptions import DataContextError
 
 
 def test_ge_configuration():
     try:
-        # Initialize the GE context
-        context = gx.get_context()
+        # Initialize the GE context with the specified project directory
+        context = DataContext("/home/username/blackstraw_ml_automation/references/gx")
         print("GE context loaded successfully.")
+
+        # Create a BatchRequest to load the data
+        batch_request = BatchRequest(
+            datasource_name="my_datasource",
+            data_connector_name="default_inferred_data_connector_name",
+            data_asset_name="extracted_data",
+        )
+
+        # Retrieve the validator
+        validator = context.get_validator(batch_request=batch_request, expectation_suite_name="extracted_data.csv.warning")
+        print("Batch loaded successfully.")
+        print(validator.head())  # Check if data is loaded
 
         # Load the checkpoint configuration
         checkpoint_name = "my_checkpoint"

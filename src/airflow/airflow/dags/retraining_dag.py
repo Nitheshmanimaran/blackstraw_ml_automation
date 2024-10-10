@@ -17,6 +17,7 @@ import joblib
 
 load_dotenv()
 MONITOR_DIR = os.getenv("TRAIN_DIR")
+MODELS_DIR = os.getenv("NEW_ARTIFACTS_DIR")
 
 default_args = {
     'owner': 'airflow',
@@ -44,8 +45,8 @@ def preprocess_data(filepath):
     df = pd.read_csv(filepath)
 
     # Load the encoders
-    scaler = joblib.load(os.path.join(MONITOR_DIR, 'scaler.joblib'))
-    one_hot_encoder = joblib.load(os.path.join(MONITOR_DIR, 'one_hot_encoder.joblib'))
+    scaler = joblib.load(os.path.join(MODELS_DIR, 'scaler.joblib'))
+    one_hot_encoder = joblib.load(os.path.join(MODELS_DIR, 'one_hot_encoder.joblib'))
 
     # Preprocess continuous features
     scaled_features = scaler.transform(df[CONTINUOUS_FEATURE_COLUMNS])
@@ -72,12 +73,13 @@ def retrain_model(filepath):
     # Retrain the model
     model.fit(X, y)
 
+    training_score = model.score(X, y)
+
     # Log the updated model as a new version
     with mlflow.start_run():
         mlflow.sklearn.log_model(model, "model", registered_model_name="HousePriceModel")
         # Optionally log metrics and parameters
-        # mlflow.log_metric("new_metric", value)
-        # mlflow.log_param("new_param", value)
+        mlflow.log_metric("Train_metric", training_score)
 
     print("Model retrained and new version saved in MLflow.")
 
