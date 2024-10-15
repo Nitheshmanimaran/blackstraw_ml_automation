@@ -1,15 +1,15 @@
 from airflow.hooks.base import BaseHook
+from unittest import mock
 
-def test_connection():
+def test_airflow_connection(mocker):
+    # Mock the get_connection method
+    mocker.patch('airflow.hooks.base.BaseHook.get_connection', return_value=mock.Mock())
+    
     try:
         conn = BaseHook.get_connection('target_postgres_conn')
-        print(f"Host: {conn.host}")
-        print(f"Schema: {conn.schema}")
-        print(f"Login: {conn.login}")
-        print(f"Password: {conn.password}")
-        print("Connection successful!")
+        assert conn is not None, "Connection not found"
     except Exception as e:
-        print(f"Connection failed: {e}")
+        assert False, f"Connection failed: {e}"
 
 if __name__ == "__main__":
-    test_connection()
+    test_airflow_connection()

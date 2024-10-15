@@ -21,7 +21,7 @@ load_dotenv()
 from house_prices import FEATURE_COLUMNS
 from house_prices.preprocess import preprocess
 
-MONITOR_DIR = os.getenv("MONITOR_DIR")\
+MONITOR_DIR = os.getenv("MONITOR_DIR")
 
 
 # Set up logging
