@@ -132,16 +132,17 @@ def train_model_task(**kwargs):
             mlflow.log_param("csv_file", csv_file)
             mlflow.log_param("model_type", "LinearRegression")
             mlflow.sklearn.log_model(model, "model", registered_model_name="HousePriceModel")
+            mlflow.log_artifact(os.path.join(output_dir, 'model.joblib'), artifact_path="model")
+
+            # Log scaler and one-hot encoder as artifacts
+            mlflow.log_artifact(os.path.join(output_dir, 'scaler.joblib'), artifact_path="preprocessing")
+            mlflow.log_artifact(os.path.join(output_dir, 'one_hot_encoder.joblib'), artifact_path="preprocessing")
 
             # Evaluate and log metrics
             y_pred = model.predict(X_test)
             rmsle = np.sqrt(mean_squared_log_error(y_test, y_pred))
             mlflow.log_metric("rmsle", rmsle)
             logger.info(f"RMSLE for file {csv_file}: {rmsle}")
-
-            # Log artifacts
-            mlflow.log_artifact(os.path.join(output_dir, 'scaler.joblib'))
-            mlflow.log_artifact(os.path.join(output_dir, 'one_hot_encoder.joblib'))
 
             # Transition the model to Production
             client = MlflowClient()

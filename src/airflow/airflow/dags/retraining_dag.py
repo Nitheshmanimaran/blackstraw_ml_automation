@@ -78,6 +78,12 @@ def retrain_model(filepath):
     # Log the updated model as a new version
     with mlflow.start_run():
         mlflow.sklearn.log_model(model, "model", registered_model_name="HousePriceModel")
+        # Log the scaler and one-hot encoder as artifacts
+        mlflow.log_artifact(os.path.join(MODELS_DIR, 'scaler.joblib'), artifact_path="preprocessing")
+        mlflow.log_artifact(os.path.join(MODELS_DIR, 'one_hot_encoder.joblib'), artifact_path="preprocessing")
+        model_path = os.path.join(MODELS_DIR, 'retrained_model.joblib')
+        joblib.dump(model, model_path)
+        mlflow.log_artifact(model_path, artifact_path="model")
         # Optionally log metrics and parameters
         mlflow.log_metric("Train_metric", training_score)
 
