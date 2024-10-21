@@ -1,4 +1,4 @@
-blackstraw_ml_automation
+ml_automation
 ==============================
 
 A project to automate ml modelling till depployment
